@@ -1,0 +1,8 @@
+[dev]
+vm1 ansible_host=54.173.155.1
+vm2 ansible_host=13.221.82.141
+vm3 ansible_host=13.220.114.99
+[qa]
+vm4 ansible_host=3.87.239.127
+vm5 ansible_host=3.83.204.180
+vm6 ansible_host=54.242.100.227 ansible_user=ec2-user
