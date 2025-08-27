@@ -1,0 +1,114 @@
+- name: Install and configure Sonatype Nexus 3 on Ubuntu 22.04
+  hosts: nexus
+  become: yes
+
+  vars:
+    nexus_user: nexus
+    nexus_group: nexus
+    nexus_base: /opt
+    nexus_dir: "{{ nexus_base }}/nexus"
+    nexus_data: /opt/sonatype-work
+    nexus_tar_url: "https://download.sonatype.com/nexus/3/latest-unix.tar.gz"
+    nexus_tar: /tmp/nexus-latest-unix.tar.gz
+    nexus_port: 8081
+    java_pkg: openjdk-17-jdk
+
+  tasks:
+    - name: Install Java and tools
+      apt:
+        name:
+          - "{{ java_pkg }}"
+          - tar
+          - gzip
+        state: present
+        update_cache: yes
+
+    - name: Create nexus user
+      user:
+        name: "{{ nexus_user }}"
+        shell: /bin/bash
+        system: yes
+        create_home: no
+
+    - name: Download Nexus tarball
+      get_url:
+        url: "{{ nexus_tar_url }}"
+        dest: "{{ nexus_tar }}"
+        mode: "0644"
+
+    - name: Create base directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ nexus_user }}"
+        group: "{{ nexus_group }}"
+        mode: "0755"
+      loop:
+        - "{{ nexus_base }}"
+        - "{{ nexus_data }}"
+
+    - name: Extract Nexus under /opt
+      unarchive:
+        src: "{{ nexus_tar }}"
+        dest: "{{ nexus_base }}"
+        remote_src: yes
+
+    - name: Detect extracted Nexus folder (e.g. /opt/nexus-3.x.x)
+      shell: "ls -d {{ nexus_base }}/nexus-* | head -n1"
+      args:
+        warn: no
+      register: nexus_folder
+
+    - name: Symlink /opt/nexus -> extracted folder
+      file:
+        src: "{{ nexus_folder.stdout }}"
+        dest: "{{ nexus_dir }}"
+        state: link
+        force: yes
+
+    - name: Ensure run_as_user is set
+      lineinfile:
+        path: "{{ nexus_dir }}/bin/nexus.rc"
+        regexp: '^#?run_as_user='
+        line: "run_as_user={{ nexus_user }}"
+        create: yes
+
+    - name: Set ownership for nexus directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        recurse: yes
+        owner: "{{ nexus_user }}"
+        group: "{{ nexus_group }}"
+      loop:
+        - "{{ nexus_dir }}"
+        - "{{ nexus_data }}"
+
+    - name: Create systemd unit for Nexus
+      copy:
+        dest: /etc/systemd/system/nexus.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Sonatype Nexus Repository Manager
+          After=network.target
+
+          [Service]
+          Type=forking
+          LimitNOFILE=65536
+          User={{ nexus_user }}
+          Group={{ nexus_group }}
+          ExecStart={{ nexus_dir }}/bin/nexus start
+          ExecStop={{ nexus_dir }}/bin/nexus stop
+          Restart=on-abort
+          Environment=INSTALL4J_ADD_VM_PARAMS="-Xms512m -Xmx1024m -XX:MaxDirectMemorySize=1024m -Djava.util.prefs.userRoot={{ nexus_data }} -Dkaraf.home={{ nexus_dir }} -Dkaraf.base={{ nexus_dir }} -Dkaraf.etc={{ nexus_dir }}/etc -Djava.io.tmpdir={{ nexus_dir }}/tmp -Dkaraf.data={{ nexus_data }} -Djava.util.logging.config.file={{ nexus_dir }}/etc/jetty/logback.xml -Djava.util.logging.manager=org.apache.juli.ClassLoaderLogManager -Dnexus-webapp-context-path=/"
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd and start Nexus
+      systemd:
+        name: nexus
+        enabled: yes
+        state: started
+        daemon_reload: yes
